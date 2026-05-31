@@ -113,6 +113,27 @@ func TestQueryJSON_DatabaseOverride(t *testing.T) {
 	}
 }
 
+func TestQueryJSON_FallsBackToClientDefault(t *testing.T) {
+	// Pinning the contract: when per-call override is empty AND the
+	// client has a configured default DB, the request DOES send the
+	// x-arc-database header with that default. Cross-DB callers MUST
+	// use setCrossDBHeaders instead — see database.go.
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("x-arc-database")
+		_, _ = io.WriteString(w, `{"columns":[],"data":[],"row_count":0}`)
+	}))
+	defer srv.Close()
+
+	c := freshClient(t, srv, "metrics") // client default = "metrics"
+	if _, err := c.QueryJSON(context.Background(), "SELECT 1", ""); err != nil {
+		t.Fatalf("QueryJSON: %v", err)
+	}
+	if got != "metrics" {
+		t.Errorf("expected x-arc-database=metrics (client default), got %q", got)
+	}
+}
+
 func TestQueryJSON_NoDatabaseHeaderWhenBothEmpty(t *testing.T) {
 	// Empty client default + empty per-call -> header should be absent
 	// so Arc applies its server-side default ("default").

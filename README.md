@@ -2,7 +2,7 @@
 
 CLI for [Arc](https://github.com/Basekick-Labs/arc) — operator-facing client for Arc time-series databases.
 
-> **Status:** v0.2.0-dev (PR2). Manages connection profiles, runs SQL queries, and writes line protocol with table / JSON / CSV / Arrow IPC output. `import` / `db` / `auth` / `cluster` subcommands ship in follow-up PRs.
+> **Status:** v0.3.0-dev (PR3). Manages connection profiles, runs SQL queries, writes line protocol, and administers databases + measurements. `import` / `auth` / `cluster` subcommands ship in follow-up PRs.
 
 ## Why
 
@@ -124,6 +124,34 @@ echo "cpu v=1 1700000000" | arcctl write --precision s
 
 `--precision` accepts `ns`, `us`, `ms`, or `s` (anything else is rejected client-side before the request goes out). The body is streamed end-to-end — `cat huge.lp | arcctl write` never buffers the whole payload in memory.
 
+## Database & measurement admin
+
+```bash
+# List every database the active token can see
+arcctl db list
+
+# Inspect one database (info + its measurements)
+arcctl db show production
+
+# Create an empty database (server validates name: alphanumeric + `_-`,
+# max 64 chars, "system" / "internal" / "_internal" are reserved)
+arcctl db create metrics
+
+# Drop a database and ALL its files. Prompts for y/N; pass --yes to
+# skip in scripts. The server requires delete.enabled=true in arc.toml
+# AND an admin token — if either is missing the server's error message
+# surfaces verbatim ("Set delete.enabled=true in arc.toml to enable.").
+arcctl db drop old_metrics
+arcctl db drop --yes ci_scratch          # no prompt
+
+# List measurements inside a database (same data shown by `db show`,
+# different default view)
+arcctl measurement list --database metrics
+arcctl measurement list -c prod --database logs -o json
+```
+
+`db list`, `db show`, and `measurement list` all support `-o table|json|csv` (no `-o arrow` — these endpoints return JSON, not Arrow IPC).
+
 ## TLS
 
 For HTTPS endpoints, certificate verification is on by default. To skip verification (lab / self-signed certs only), use either:
@@ -139,7 +167,7 @@ This repo is being built in [phased PRs](https://github.com/Basekick-Labs/arcctl
 
 - ~~**PR1** — scaffold, `config` subcommand tree, multi-connection store~~ ✅ shipped
 - ~~**PR2** — `arcctl query`, `arcctl write`, output formats: table/json/csv/arrow~~ ✅ shipped
-- **PR3** — `arcctl db {list,create,drop,show}`, `arcctl measurement list`
+- ~~**PR3** — `arcctl db {list,show,create,drop}`, `arcctl measurement list`~~ ✅ shipped
 - **PR4** — `arcctl import {csv,lp,parquet,msgpack}`
 - **PR5** — `arcctl auth {token,whoami}`
 - **PR6** — `arcctl cluster {status,nodes}`, `arcctl compaction`, `arcctl retention`

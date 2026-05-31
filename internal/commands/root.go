@@ -1,7 +1,8 @@
 // Package commands wires the arcctl cobra command tree.
 //
-// Each top-level command lives in its own file. PR1 ships `root` +
-// `config`. Later PRs add: query, write, import, db, auth, cluster, ops.
+// Each top-level command lives in its own file. PR1 shipped `root` +
+// `config`; PR2 added `query` + `write`; PR3 added `db` + `measurement`.
+// Later PRs add: import, auth, cluster, ops.
 package commands
 
 import "github.com/spf13/cobra"
@@ -32,6 +33,8 @@ First-time setup:
 		newConfigCmd(),
 		newQueryCmd(),
 		newWriteCmd(),
+		newDBCmd(),
+		newMeasurementCmd(),
 	)
 	return root
 }
