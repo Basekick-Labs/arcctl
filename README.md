@@ -2,11 +2,11 @@
 
 CLI for [Arc](https://github.com/Basekick-Labs/arc) — operator-facing client for Arc time-series databases.
 
-> **Status:** v0.1.0-dev (PR1 scaffold). Manages connection profiles. `query` / `write` / `import` / `db` / `auth` / `cluster` subcommands ship in follow-up PRs.
+> **Status:** v0.2.0-dev (PR2). Manages connection profiles, runs SQL queries, and writes line protocol with table / JSON / CSV / Arrow IPC output. `import` / `db` / `auth` / `cluster` subcommands ship in follow-up PRs.
 
 ## Why
 
-Today operating Arc means hand-crafting `curl` calls: copying the bootstrap token from a stderr banner, building JSON query bodies, remembering header names like `x-arc-database`, and decoding column-major responses by eye. `arcctl` replaces that with a familiar CLI workflow modeled on `influx`, `kubectl`, and `clickhouse-client`.
+Today operating Arc means hand-crafting `curl` calls: copying the bootstrap token from a stderr banner, building JSON query bodies, remembering header names like `x-arc-database`, and decoding `{"columns":[...],"data":[...]}` responses by eye. `arcctl` replaces that with a familiar CLI workflow modeled on `influx`, `kubectl`, and `clickhouse-client`.
 
 ## Install
 
@@ -79,18 +79,71 @@ If none are set, commands fail with a clear "no active connection" error.
 
 Honors `ARCCTL_CONFIG` env var for test/CI overrides; otherwise `~/.arcctl/config.toml`.
 
+## Querying
+
+```bash
+# Pretty table (default)
+arcctl query "SELECT host, value FROM cpu ORDER BY value LIMIT 10"
+
+# Override the database for one call
+arcctl query --database metrics "SELECT count(*) FROM cpu"
+
+# Read SQL from a file
+arcctl query -f reports/p99.sql
+
+# Pipe SQL from another command
+echo "SELECT 1" | arcctl query
+
+# Machine-parseable output
+arcctl query "SELECT * FROM cpu" -o json | jq '.data[0]'
+arcctl query "SELECT * FROM cpu" -o csv > out.csv
+
+# Arrow IPC stream — feed it to pyarrow / duckdb / polars
+arcctl query "SELECT * FROM cpu" -o arrow | duckdb -c "SELECT * FROM read_arrow('/dev/stdin')"
+```
+
+The output formats:
+
+- `-o table` (default) — pretty-printed bordered table; honors `--no-header` and `--limit N`
+- `-o json` — the raw `{"columns":[...],"data":[...]}` response, jq-friendly
+- `-o csv` — RFC 4180 with a header row by default
+- `-o arrow` — binary Arrow IPC stream on stdout; server-side execution time goes to stderr
+
+## Writing
+
+```bash
+# Stdin pipe (most common in CI / log forwarders)
+echo "cpu,host=server-1 value=42.5 $(date +%s)000000000" | arcctl write
+
+# From a file
+arcctl write -f payload.lp --database metrics --precision ms
+
+# Explicit precision (default is nanoseconds, matching the server)
+echo "cpu v=1 1700000000" | arcctl write --precision s
+```
+
+`--precision` accepts `ns`, `us`, `ms`, or `s` (anything else is rejected client-side before the request goes out). The body is streamed end-to-end — `cat huge.lp | arcctl write` never buffers the whole payload in memory.
+
+## TLS
+
+For HTTPS endpoints, certificate verification is on by default. To skip verification (lab / self-signed certs only), use either:
+
+- `--insecure` on a single command, or
+- `insecure_tls = true` in the connection profile (set once via `arcctl config create --insecure`)
+
+When verification is skipped, a `WARNING:` line is printed to stderr. The flag is a no-op on `http://` endpoints and the warning is suppressed.
+
 ## Roadmap
 
 This repo is being built in [phased PRs](https://github.com/Basekick-Labs/arcctl/pulls):
 
-- **PR1** (this) — scaffold, `config` subcommand tree, multi-connection store
-- **PR2** — `arcctl query`, `arcctl write`
+- ~~**PR1** — scaffold, `config` subcommand tree, multi-connection store~~ ✅ shipped
+- ~~**PR2** — `arcctl query`, `arcctl write`, output formats: table/json/csv/arrow~~ ✅ shipped
 - **PR3** — `arcctl db {list,create,drop,show}`, `arcctl measurement list`
 - **PR4** — `arcctl import {csv,lp,parquet,msgpack}`
 - **PR5** — `arcctl auth {token,whoami}`
 - **PR6** — `arcctl cluster {status,nodes}`, `arcctl compaction`, `arcctl retention`
-- **PR7** — `-o csv` and `-o arrow` output formats
-- **PR8** — release workflow + Homebrew tap + multi-arch Docker, cut v1.0.0
+- **PR7** — release workflow + Homebrew tap + multi-arch Docker, cut v1.0.0
 
 Target: arcctl 1.x speaks to Arc 26.06+.
 

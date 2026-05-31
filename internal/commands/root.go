@@ -28,6 +28,10 @@ First-time setup:
 		SilenceUsage: true,
 	}
 
-	root.AddCommand(newConfigCmd())
+	root.AddCommand(
+		newConfigCmd(),
+		newQueryCmd(),
+		newWriteCmd(),
+	)
 	return root
 }
