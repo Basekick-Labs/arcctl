@@ -1,0 +1,24 @@
+# Local build output
+/arcctl
+/arcctl.exe
+/dist/
+
+# Test binaries
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local-only state (CLAUDE.md is tracked; settings + worktrees are not)
+.claude/settings.local.json
+.claude/worktrees/
+
+# macOS
+.DS_Store
+
+# Coverage
+coverage.txt
+coverage.html

@@ -1,0 +1,205 @@
+// Package config manages arcctl's persistent client configuration.
+//
+// arcctl stores named connections (endpoint + token + default database)
+// in a TOML file at ~/.arcctl/config.toml, with one connection marked
+// "active". This mirrors the InfluxDB v2 CLI's `influx config` model so
+// operators coming from InfluxDB get the UX without thinking.
+//
+// Precedence for which connection a command uses (highest first):
+//  1. --connection / -c flag
+//  2. --endpoint + --token flags (full ad-hoc override)
+//  3. ARC_CONNECTION env var
+//  4. ARC_ENDPOINT + ARC_TOKEN env vars (full ad-hoc override)
+//  5. active connection in ~/.arcctl/config.toml
+//
+// If nothing is set the resolver returns an error rather than guessing.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/viper"
+)
+
+// Connection is one named Arc endpoint + its credentials.
+type Connection struct {
+	Endpoint        string `mapstructure:"endpoint" toml:"endpoint"`
+	Token           string `mapstructure:"token" toml:"token"`
+	DefaultDatabase string `mapstructure:"default_database,omitempty" toml:"default_database,omitempty"`
+	InsecureTLS     bool   `mapstructure:"insecure_tls,omitempty" toml:"insecure_tls,omitempty"`
+}
+
+// Config is the whole arcctl config file's contents.
+type Config struct {
+	Active      string                `mapstructure:"active" toml:"active"`
+	Connections map[string]Connection `mapstructure:"connections" toml:"connections"`
+}
+
+// ConfigPath returns the path arcctl reads/writes its config from.
+// Honors ARCCTL_CONFIG env var (for tests + CI); otherwise
+// ~/.arcctl/config.toml. Creates the parent directory on demand.
+func ConfigPath() (string, error) {
+	if p := os.Getenv("ARCCTL_CONFIG"); p != "" {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".arcctl", "config.toml"), nil
+}
+
+// Load reads the config file. Returns an empty (no-connections) Config
+// if the file does not exist — this is the expected first-run state, not
+// an error. Returns a real error only for malformed files or I/O
+// failures.
+func Load() (*Config, error) {
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return &Config{Connections: map[string]Connection{}}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stat config: %w", err)
+	}
+
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("toml")
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	cfg := &Config{Connections: map[string]Connection{}}
+	if err := v.Unmarshal(cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if cfg.Connections == nil {
+		cfg.Connections = map[string]Connection{}
+	}
+	return cfg, nil
+}
+
+// Save writes the config back to disk atomically (write to .tmp + rename).
+// Creates parent dirs (mode 0700) and writes the file mode 0600 because
+// tokens are plaintext — same posture as ~/.aws/credentials and the
+// existing `arc.toml` server config.
+func (c *Config) Save() error {
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	v := viper.New()
+	v.Set("active", c.Active)
+	v.Set("connections", c.Connections)
+
+	// Write to a temp file in the same directory then rename atomically,
+	// so we never leave a half-written config behind on a crash. Use a
+	// .toml extension on the temp path because viper.WriteConfigAs infers
+	// format from the extension and rejects unknown suffixes like .tmp.
+	tmp, err := os.CreateTemp(dir, "config.*.toml")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Close immediately — viper.WriteConfigAs reopens with its own
+	// codec rather than appending to our handle.
+	_ = tmp.Close()
+	if err := v.WriteConfigAs(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename config into place: %w", err)
+	}
+	return nil
+}
+
+// ResolveOptions are the per-command overrides Resolve consults before
+// falling back to env vars and the active connection in the file.
+type ResolveOptions struct {
+	// ConnectionName overrides which named connection to use. Empty
+	// means "use precedence below".
+	ConnectionName string
+	// Endpoint + Token are full ad-hoc overrides. If both are set,
+	// they produce an unnamed Connection without touching the file.
+	Endpoint string
+	Token    string
+}
+
+// Resolve returns the Connection a command should use. See the package
+// docstring for full precedence rules. The returned Connection is never
+// persisted by this call — Save() is only invoked by the `config`
+// subcommand explicitly.
+func (c *Config) Resolve(opts ResolveOptions) (Connection, string, error) {
+	// 1. --connection flag wins outright.
+	if opts.ConnectionName != "" {
+		conn, ok := c.Connections[opts.ConnectionName]
+		if !ok {
+			return Connection{}, "", fmt.Errorf("connection %q not found in config (use `arcctl config list`)", opts.ConnectionName)
+		}
+		return conn, opts.ConnectionName, nil
+	}
+
+	// 2. Full ad-hoc flag overrides (--endpoint + --token).
+	if opts.Endpoint != "" && opts.Token != "" {
+		return Connection{Endpoint: opts.Endpoint, Token: opts.Token}, "(flags)", nil
+	}
+	if opts.Endpoint != "" || opts.Token != "" {
+		return Connection{}, "", errors.New("--endpoint and --token must be set together for ad-hoc use")
+	}
+
+	// 3. ARC_CONNECTION env var.
+	if name := os.Getenv("ARC_CONNECTION"); name != "" {
+		conn, ok := c.Connections[name]
+		if !ok {
+			return Connection{}, "", fmt.Errorf("ARC_CONNECTION=%q not found in config", name)
+		}
+		return conn, name, nil
+	}
+
+	// 4. Full env override (ARC_ENDPOINT + ARC_TOKEN).
+	ep := os.Getenv("ARC_ENDPOINT")
+	tok := os.Getenv("ARC_TOKEN")
+	if ep != "" && tok != "" {
+		return Connection{Endpoint: ep, Token: tok}, "(env)", nil
+	}
+	if ep != "" || tok != "" {
+		return Connection{}, "", errors.New("ARC_ENDPOINT and ARC_TOKEN must both be set for env-only auth")
+	}
+
+	// 5. Active connection in file.
+	if c.Active == "" {
+		return Connection{}, "", errors.New("no active connection configured (run `arcctl config create --name NAME --endpoint URL --token TOKEN --activate`)")
+	}
+	conn, ok := c.Connections[c.Active]
+	if !ok {
+		return Connection{}, "", fmt.Errorf("active connection %q referenced in config but not defined", c.Active)
+	}
+	return conn, c.Active, nil
+}
+
+// RedactToken returns the token with all but the first 4 and last 4
+// characters replaced by * for display in `config list` / `config
+// current` output. A token shorter than 12 chars is fully redacted.
+func RedactToken(token string) string {
+	if len(token) < 12 {
+		return "************"
+	}
+	return token[:4] + "..." + token[len(token)-4:]
+}
