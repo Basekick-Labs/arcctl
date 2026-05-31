@@ -237,15 +237,19 @@ config gate is the reason.`,
 				return fmt.Errorf("--timeout must be > 0 (got %s)", timeout)
 			}
 			name := args[0]
+			// Build the client BEFORE the confirmation prompt so a
+			// misconfigured connection fails fast instead of making
+			// the user say "yes" to a delete that can't be sent.
+			// (Gemini PR #2 finding — better UX, no functional change.)
+			cli, _, err := buildClient(cmd.ErrOrStderr(), connectionName, endpoint, token, insecure, timeout)
+			if err != nil {
+				return err
+			}
 			if !yes {
 				if !confirmDestructive(cmd, fmt.Sprintf("Delete database %q and ALL its files?", name)) {
 					fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
 					return nil
 				}
-			}
-			cli, _, err := buildClient(cmd.ErrOrStderr(), connectionName, endpoint, token, insecure, timeout)
-			if err != nil {
-				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
