@@ -2,7 +2,7 @@
 
 CLI for [Arc](https://github.com/Basekick-Labs/arc) — operator-facing client for Arc time-series databases.
 
-> **Status:** v0.3.0-dev (PR3). Manages connection profiles, runs SQL queries, writes line protocol, and administers databases + measurements. `import` / `auth` / `cluster` subcommands ship in follow-up PRs.
+> **Status:** v0.4.0-dev (PR4). Manages connection profiles, runs SQL queries, writes line protocol, administers databases + measurements, and bulk-imports CSV / LP / Parquet / TLE files. `auth` / `cluster` subcommands ship in follow-up PRs.
 
 ## Why
 
@@ -152,6 +152,32 @@ arcctl measurement list -c prod --database logs -o json
 
 `db list`, `db show`, and `measurement list` all support `-o table|json|csv` (no `-o arrow` — these endpoints return JSON, not Arrow IPC).
 
+## Bulk import
+
+`arcctl import` ships four file-import flows backed by Arc's admin-only `/api/v1/import/*` endpoints. Upload bodies are streamed via `io.Pipe`, so even multi-GB files don't buffer in memory.
+
+```bash
+# CSV — file has no measurement, so --measurement is required
+arcctl import csv -f data.csv --database metrics --measurement cpu
+arcctl import csv -f data.csv --database metrics --measurement cpu \
+    --time-column ts --time-format epoch_ms --delimiter ';' --skip-rows 1
+
+# Line protocol — measurement comes from the LP lines themselves;
+# --measurement here is an optional filter. Server auto-detects gzip.
+arcctl import lp -f telegraf.lp --database metrics
+arcctl import lp -f data.lp.gz --database metrics --precision ms
+arcctl import lp -f data.lp --database metrics --measurement cpu  # filter
+
+# Parquet — preserves types end-to-end (faster + lossless vs CSV)
+arcctl import parquet -f data.parquet --database metrics --measurement cpu
+
+# TLE (NORAD two-line element / satellite tracking)
+arcctl import tle -f starlink.tle --database satellites
+arcctl import tle -f starlink.tle --database satellites --measurement starlink
+```
+
+All four require an **admin** token (server-side `adminAuth`). Each prints either a pretty result block or `-o json` for scripting; server errors (auth, validation, "file is empty", quota) surface verbatim.
+
 ## TLS
 
 For HTTPS endpoints, certificate verification is on by default. To skip verification (lab / self-signed certs only), use either:
@@ -168,10 +194,11 @@ This repo is being built in [phased PRs](https://github.com/Basekick-Labs/arcctl
 - ~~**PR1** — scaffold, `config` subcommand tree, multi-connection store~~ ✅ shipped
 - ~~**PR2** — `arcctl query`, `arcctl write`, output formats: table/json/csv/arrow~~ ✅ shipped
 - ~~**PR3** — `arcctl db {list,show,create,drop}`, `arcctl measurement list`~~ ✅ shipped
-- **PR4** — `arcctl import {csv,lp,parquet,msgpack}`
+- ~~**PR4** — `arcctl import {csv,lp,parquet,tle}` (msgpack write deferred to a follow-up)~~ ✅ shipped
 - **PR5** — `arcctl auth {token,whoami}`
 - **PR6** — `arcctl cluster {status,nodes}`, `arcctl compaction`, `arcctl retention`
-- **PR7** — release workflow + Homebrew tap + multi-arch Docker, cut v1.0.0
+- **PR7** — `arcctl write --format msgpack` (msgpack-write follow-up)
+- **PR8** — release workflow + Homebrew tap + multi-arch Docker, cut v1.0.0
 
 Target: arcctl 1.x speaks to Arc 26.06+.
 
