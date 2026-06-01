@@ -14,6 +14,33 @@ func newImportTestCmd() *cobra.Command {
 	return &cobra.Command{Use: "test"}
 }
 
+// TestImportCSV_RejectsNegativeSkipRows pins the client-side validation
+// Gemini flagged in arcctl PR #3: a negative --skip-rows used to pass
+// silently into the client (which drops it via `> 0`), so the user got
+// no error AND no skip. The RunE-level guard now fails fast.
+//
+// Driven through the cobra command rather than calling RunE directly so
+// the test covers the wired flag path end-to-end.
+func TestImportCSV_RejectsNegativeSkipRows(t *testing.T) {
+	cmd := newImportCSVCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--file", "/tmp/whatever",
+		"--measurement", "m",
+		"--endpoint", "http://127.0.0.1:1",
+		"--token", "t",
+		"--skip-rows", "-5",
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--skip-rows must be >= 0") {
+		t.Errorf("error %q does not mention --skip-rows", err)
+	}
+}
+
 func TestValidImportOutputFormat(t *testing.T) {
 	for _, f := range []string{"table", "json"} {
 		if !validImportOutputFormat(f) {

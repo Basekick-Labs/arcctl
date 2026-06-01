@@ -252,22 +252,29 @@ func (c *Client) uploadMultipart(
 
 	go func() {
 		// Inside the goroutine we own both `f` and `mw` and are
-		// responsible for closing both regardless of error path so the
-		// reader side (HTTP request body) eventually sees EOF or a real
-		// error rather than blocking forever.
+		// responsible for closing the pipe on every path so the reader
+		// side (HTTP request body) eventually sees EOF or a real error
+		// rather than blocking forever.
 		defer f.Close()
 
 		part, err := mw.CreateFormFile("file", filepath.Base(filePath))
 		if err != nil {
-			_ = mw.Close()
+			// Don't call mw.Close() on error paths — it would write
+			// the trailing boundary into a stream whose preceding
+			// content is already known-bad, producing a multipart
+			// payload that's syntactically valid but semantically
+			// truncated. Just signal the error on the pipe and let
+			// the reader surface it. (Gemini PR #3 finding.)
 			_ = pw.CloseWithError(fmt.Errorf("create form file: %w", err))
 			return
 		}
 		if _, err := io.Copy(part, f); err != nil {
-			_ = mw.Close()
 			_ = pw.CloseWithError(fmt.Errorf("stream file body: %w", err))
 			return
 		}
+		// Happy path: close the multipart writer so the trailing
+		// boundary is written, then close the pipe cleanly so the
+		// reader sees EOF.
 		if err := mw.Close(); err != nil {
 			_ = pw.CloseWithError(fmt.Errorf("close multipart writer: %w", err))
 			return

@@ -133,6 +133,13 @@ func newImportCSVCmd() *cobra.Command {
 			if measurement == "" {
 				return fmt.Errorf("--measurement is required (CSV files don't carry a measurement name)")
 			}
+			if skipRows < 0 {
+				// Without this guard a negative value passes through to
+				// ImportCSV, which silently drops it (the `> 0` check in
+				// the client). Validate at the boundary so the user gets
+				// a clear error instead of confusing no-op behavior.
+				return fmt.Errorf("--skip-rows must be >= 0 (got %d)", skipRows)
+			}
 
 			cli, _, err := buildClient(cmd.ErrOrStderr(), common.connectionName, common.endpoint, common.token, common.insecure, common.timeout)
 			if err != nil {
