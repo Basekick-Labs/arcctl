@@ -207,6 +207,27 @@ func TestImportCSV_MissingDatabase(t *testing.T) {
 	}
 }
 
+// TestImportCSV_RejectsNegativeSkipRows pins the client-layer
+// validation Gemini added in PR #3 round 4. The cobra layer rejects
+// negative --skip-rows at RunE, but the client must ALSO reject so
+// any future caller bypassing cobra can't silently drop the value.
+func TestImportCSV_RejectsNegativeSkipRows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called when SkipRows is negative")
+	}))
+	defer srv.Close()
+
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "data.csv", "x\n1\n")
+	_, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{SkipRows: -3})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "SkipRows must be >= 0") {
+		t.Errorf("error %q lacks SkipRows context", err)
+	}
+}
+
 func TestImportCSV_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

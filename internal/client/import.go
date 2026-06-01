@@ -109,6 +109,17 @@ type TLEImportOptions struct {
 // Server requires the `measurement` query param (not derivable from the
 // file). Server-side admin auth required.
 func (c *Client) ImportCSV(ctx context.Context, filePath, database, measurement string, opts CSVImportOptions) (*ImportResult, error) {
+	// Explicitly reject negative SkipRows. Previously this branch was
+	// `opts.SkipRows > 0` which silently dropped negative values — the
+	// cobra layer rejects them at RunE today, but any future caller
+	// that bypasses the cobra path (a programmatic test helper, a
+	// follow-up command) would re-introduce the silent-drop bug.
+	// Surfacing it here makes the contract explicit at the client
+	// boundary. (Gemini PR #3 round 4.)
+	if opts.SkipRows < 0 {
+		return nil, fmt.Errorf("CSVImportOptions.SkipRows must be >= 0 (got %d)", opts.SkipRows)
+	}
+
 	q := url.Values{}
 	q.Set("measurement", measurement)
 	if opts.TimeColumn != "" {
