@@ -105,6 +105,15 @@ func New(cfg Config) (*Client, error) {
 // Useful for `-v` verbose output.
 func (c *Client) Endpoint() string { return c.cfg.Endpoint }
 
+// DefaultDatabase returns the database the client falls back to when
+// a per-call override is empty. May itself be empty (in which case
+// Arc applies its server-side default, "default"). Exposed so the
+// command layer can implement "use the connection's default DB"
+// semantics for endpoints whose URL is database-scoped (e.g.
+// /api/v1/databases/:name/measurements) where the server can't
+// apply a fallback for us.
+func (c *Client) DefaultDatabase() string { return c.cfg.Database }
+
 // resolveDatabase picks the per-call override if set, else the
 // client's default. Both can be empty (Arc falls back to "default").
 func (c *Client) resolveDatabase(override string) string {
@@ -114,13 +123,26 @@ func (c *Client) resolveDatabase(override string) string {
 	return c.cfg.Database
 }
 
-// setCommonHeaders writes Authorization + (optional) x-arc-database
-// onto a *http.Request. Used by every Do* call so the headers are set
-// in exactly one place.
+// setCommonHeaders writes Authorization, x-arc-database (per the
+// resolveDatabase rules), and User-Agent onto a *http.Request. Use
+// for per-database endpoints (query, write).
 func (c *Client) setCommonHeaders(req *http.Request, database string) {
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	if db := c.resolveDatabase(database); db != "" {
 		req.Header.Set(HeaderDatabase, db)
 	}
+	req.Header.Set("User-Agent", "arcctl")
+}
+
+// setCrossDBHeaders writes Authorization + User-Agent but NEVER sends
+// x-arc-database. Use for endpoints whose URL is itself the database
+// selector (e.g. /api/v1/databases, /api/v1/databases/:name/...) or
+// that are inherently cross-database (the list endpoints).
+//
+// Distinct from setCommonHeaders so the no-DB case is intentional, not
+// accidental — calling setCommonHeaders(req, "") on a client with a
+// non-empty default Database would silently include the wrong header.
+func (c *Client) setCrossDBHeaders(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	req.Header.Set("User-Agent", "arcctl")
 }
