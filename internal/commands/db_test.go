@@ -46,6 +46,67 @@ func TestRenderDatabaseList_TableEmpty(t *testing.T) {
 	}
 }
 
+// Regression for Gemini PR #2 finding: when the server returns no
+// databases, JSON output MUST be `"databases": []`, not `"databases":
+// null`. Many JSON consumers (jq filters, JSON-schema validators with
+// `minItems: 0`, frontends doing `.map()`) treat null and [] as
+// semantically distinct — null is "unknown/missing", [] is "known
+// empty." Catching this in a test pins the make+copy idiom inside
+// renderDatabaseList so a future refactor back to append-to-nil
+// fails CI loudly.
+func TestRenderDatabaseList_JSONEmpty_IsArrayNotNull(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := newTestCmd()
+	cmd.SetOut(&buf)
+	list := &client.DatabaseListResponse{Databases: nil, Count: 0}
+	if err := renderDatabaseList(cmd, list, "json", false); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "null") {
+		t.Errorf("JSON output contains `null` — empty slice must encode as `[]`. Got:\n%s", out)
+	}
+	// Positive form: confirm the bracketed-empty shape is actually present.
+	if !strings.Contains(out, `"databases": []`) {
+		t.Errorf("expected `\"databases\": []` in output, got:\n%s", out)
+	}
+}
+
+func TestRenderDatabaseShow_JSONEmpty_IsArrayNotNull(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := newTestCmd()
+	cmd.SetOut(&buf)
+	info := &client.DatabaseInfo{Name: "empty_db", MeasurementCount: 0}
+	list := &client.MeasurementListResponse{Database: "empty_db", Measurements: nil, Count: 0}
+	if err := renderDatabaseShow(cmd, info, list, "json", false); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "null") {
+		t.Errorf("JSON output contains `null` — empty measurements slice must encode as `[]`. Got:\n%s", out)
+	}
+	if !strings.Contains(out, `"measurements": []`) {
+		t.Errorf("expected `\"measurements\": []` in output, got:\n%s", out)
+	}
+}
+
+func TestRenderMeasurementList_JSONEmpty_IsArrayNotNull(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := newTestCmd()
+	cmd.SetOut(&buf)
+	list := &client.MeasurementListResponse{Database: "metrics", Measurements: nil, Count: 0}
+	if err := renderMeasurementList(cmd, list, "json", false); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "null") {
+		t.Errorf("JSON output contains `null` — empty measurements slice must encode as `[]`. Got:\n%s", out)
+	}
+	if !strings.Contains(out, `"measurements": []`) {
+		t.Errorf("expected `\"measurements\": []` in output, got:\n%s", out)
+	}
+}
+
 func TestRenderDatabaseList_TableSortsByName(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := newTestCmd()

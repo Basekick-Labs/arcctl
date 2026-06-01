@@ -93,9 +93,13 @@ command errors before any network call.`,
 
 func renderMeasurementList(cmd *cobra.Command, list *client.MeasurementListResponse, format string, noHeader bool) error {
 	// Defensive copy + sort: same rationale as renderDatabaseList —
-	// keep table/csv/json row order consistent, don't mutate the caller's
-	// slice.
-	ms := append([]client.DatabaseMeasurement(nil), list.Measurements...)
+	// keep table/csv/json row order consistent, don't mutate the
+	// caller's slice. make+copy (not append-to-nil) guarantees the
+	// result is a non-nil empty slice when the server returned no
+	// measurements, so JSON output stays `"measurements": []` rather
+	// than `null`. (Gemini PR #2 finding.)
+	ms := make([]client.DatabaseMeasurement, len(list.Measurements))
+	copy(ms, list.Measurements)
 	sort.Slice(ms, func(i, j int) bool { return ms[i].Name < ms[j].Name })
 
 	switch format {

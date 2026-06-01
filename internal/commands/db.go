@@ -321,9 +321,13 @@ func validListFormat(s string) bool {
 // stable regardless of server iteration order. JSON sorts too so the
 // three formats agree on row order.
 func renderDatabaseList(cmd *cobra.Command, list *client.DatabaseListResponse, format string, noHeader bool) error {
-	// Defensive copy: we mustn't mutate the caller's slice when we sort,
-	// since the same response object may be reused (e.g. in tests).
-	dbs := append([]client.DatabaseInfo(nil), list.Databases...)
+	// Defensive copy: we mustn't mutate the caller's slice when we
+	// sort. Use make+copy (not append-to-nil) so that an empty
+	// list.Databases produces an empty-but-non-nil slice; the
+	// difference matters for JSON output where nil encodes as
+	// `null` and []T{} encodes as `[]`. (Gemini PR #2 finding.)
+	dbs := make([]client.DatabaseInfo, len(list.Databases))
+	copy(dbs, list.Databases)
 	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
 
 	switch format {
@@ -379,7 +383,11 @@ func writeDBListCSV(w io.Writer, dbs []client.DatabaseInfo, noHeader bool) error
 // output stacks two visual blocks; CSV emits only measurements (the
 // db-info block isn't tabular-shaped).
 func renderDatabaseShow(cmd *cobra.Command, info *client.DatabaseInfo, list *client.MeasurementListResponse, format string, noHeader bool) error {
-	measurements := append([]client.DatabaseMeasurement(nil), list.Measurements...)
+	// make+copy (not append-to-nil) so an empty server response
+	// encodes as `"measurements": []` rather than `"measurements":
+	// null` in JSON output. (Gemini PR #2 finding.)
+	measurements := make([]client.DatabaseMeasurement, len(list.Measurements))
+	copy(measurements, list.Measurements)
 	sort.Slice(measurements, func(i, j int) bool { return measurements[i].Name < measurements[j].Name })
 
 	switch format {
