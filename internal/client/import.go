@@ -250,6 +250,17 @@ func (c *Client) uploadMultipart(
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 
+	// Guarantee pr is closed when this function exits, regardless of
+	// path. Without this, an early failure in http.NewRequestWithContext
+	// or http.Do (DNS failure, TLS handshake failure, ctx cancelled
+	// before send) would leave pr open — the writer goroutine then
+	// blocks on pw.Write forever, leaking the goroutine and the
+	// underlying file handle. io.PipeReader.Close is idempotent per
+	// Go's documentation, so a redundant close on the happy path
+	// (where the transport already closed pr after reading the body
+	// to EOF) is harmless. (Gemini PR #3 round 3 finding — High.)
+	defer pr.Close()
+
 	go func() {
 		// Inside the goroutine we own both `f` and `mw` and are
 		// responsible for closing the pipe on every path so the reader
@@ -284,9 +295,9 @@ func (c *Client) uploadMultipart(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, pr)
 	if err != nil {
-		_ = pr.Close()
 		return nil, fmt.Errorf("build import request: %w", err)
 	}
+
 	// Database goes via x-arc-database header for consistency with
 	// query/write (the server also accepts ?db= as a fallback).
 	c.setCommonHeaders(req, database)

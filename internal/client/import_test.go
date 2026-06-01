@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeTempFile writes content to a fresh temp file and returns its path.
@@ -429,6 +432,74 @@ func drainMultipartFile(t *testing.T, r *http.Request) (string, string, int) {
 		t.Fatalf("drain: %v", err)
 	}
 	return hdr.Filename, "", int(n)
+}
+
+// TestUploadMultipart_NoGoroutineLeakOnEarlyDoFailure runs the import
+// path against a refused-connection port and verifies that no goroutine
+// is leaked across many iterations.
+//
+// Context: Gemini PR #3 round-3 raised the concern that if
+// c.http.Do returns an error before the transport begins reading the
+// request body, the io.Pipe writer goroutine could block on pw.Write
+// forever and leak both the goroutine and the underlying file handle.
+// The fix is `defer pr.Close()` immediately after io.Pipe creation, so
+// the pipe is closed on every return path regardless of transport
+// behavior.
+//
+// Empirically (Go 1.25), net/http's transport DOES close req.Body on
+// the connection-refused path, so the leak isn't reproducible by simply
+// refusing the TCP connection — `delta=0` even without the fix. This
+// test therefore exists as a guard rather than a strict reproducer: if
+// a future Go change (or a different early-failure path like
+// pre-send ctx-cancel) starts leaking, the linear growth would surface
+// here. We accept that the mutation test passes today — the defense-in-
+// depth value of the fix isn't reproducible in current Go, but the
+// `defer pr.Close()` is still correct hygiene.
+func TestUploadMultipart_NoGoroutineLeakOnEarlyDoFailure(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	c, err := New(Config{
+		Endpoint: "http://" + deadAddr,
+		Token:    "t",
+		Timeout:  2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	filePath := writeTempFile(t, "x.csv", "a,b\n1,2\n")
+
+	runtime.GC()
+	runtime.Gosched()
+	time.Sleep(50 * time.Millisecond)
+	before := runtime.NumGoroutine()
+
+	const iterations = 8
+	for i := 0; i < iterations; i++ {
+		_, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{})
+		if err == nil {
+			t.Fatal("expected error from refused connection, got nil")
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var after int
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		after = runtime.NumGoroutine()
+		if after-before < iterations {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if after-before >= iterations {
+		t.Errorf("goroutine leak: before=%d after=%d delta=%d iterations=%d", before, after, after-before, iterations)
+	}
 }
 
 // TestContentTypeIsValidMultipart verifies the Content-Type header the
