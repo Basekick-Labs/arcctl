@@ -14,6 +14,63 @@ func newImportTestCmd() *cobra.Command {
 	return &cobra.Command{Use: "test"}
 }
 
+// TestImportCSV_MarkFlagRequired_File pins the cobra MarkFlagRequired
+// behavior for --file (added in Gemini PR #3 r5). Without the flag,
+// cobra should error before RunE with the canonical
+// `required flag(s) "file" not set` message.
+func TestImportCSV_MarkFlagRequired_File(t *testing.T) {
+	cmd := newImportCSVCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	// Pass --measurement so the only missing required flag is --file.
+	cmd.SetArgs([]string{"--measurement", "m", "--endpoint", "http://127.0.0.1:1", "--token", "t"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "file" not set`) {
+		t.Errorf("error %q does not mention required --file flag", err)
+	}
+}
+
+// TestImportCSV_MarkFlagRequired_Measurement is the same check for
+// --measurement, which is required for CSV (the file doesn't carry a
+// measurement name).
+func TestImportCSV_MarkFlagRequired_Measurement(t *testing.T) {
+	cmd := newImportCSVCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--file", "/tmp/whatever.csv", "--endpoint", "http://127.0.0.1:1", "--token", "t"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "measurement" not set`) {
+		t.Errorf("error %q does not mention required --measurement flag", err)
+	}
+}
+
+// TestImportLP_MarkFlagRequired_File — LP does NOT require
+// --measurement (measurement is self-declared in line syntax), so only
+// --file should be marked required.
+func TestImportLP_MarkFlagRequired_File(t *testing.T) {
+	cmd := newImportLPCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--endpoint", "http://127.0.0.1:1", "--token", "t"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), `required flag(s) "file" not set`) {
+		t.Errorf("error %q does not mention required --file flag", err)
+	}
+	// Confirm --measurement is NOT marked required for LP.
+	if strings.Contains(err.Error(), "measurement") {
+		t.Errorf("error %q unexpectedly mentions --measurement (should be optional for LP)", err)
+	}
+}
+
 // TestImportCSV_RejectsNegativeSkipRows pins the client-side validation
 // Gemini flagged in arcctl PR #3: a negative --skip-rows used to pass
 // silently into the client (which drops it via `> 0`), so the user got

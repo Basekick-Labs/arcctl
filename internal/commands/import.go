@@ -69,12 +69,18 @@ type importCommonFlags struct {
 
 // addImportCommonFlags registers the flags shared by every import
 // subcommand. The format-specific subcommands add their own on top.
+//
+// Marks --file as required via cobra's built-in mechanism. Cobra
+// enforces it before RunE runs and produces a uniform error message
+// ("required flag(s) \"file\" not set"), so individual subcommands
+// don't need manual `if filePath == ""` guards. (Gemini PR #3 r5.)
 func addImportCommonFlags(c *cobra.Command, f *importCommonFlags) {
 	addCommonConnectionFlags(c, &f.connectionName, &f.endpoint, &f.token, &f.insecure)
 	c.Flags().StringVar(&f.database, "database", "", "target database (required; can also come from active connection's default_database)")
 	c.Flags().StringVarP(&f.filePath, "file", "f", "", "path to the input file (required)")
 	c.Flags().StringVarP(&f.outputFormat, "output", "o", output.FormatTable, "output format: table|json")
 	addTimeoutFlag(c, &f.timeout)
+	_ = c.MarkFlagRequired("file")
 }
 
 // resolveImportDatabase picks --database if set, else the active
@@ -127,17 +133,9 @@ func newImportCSVCmd() *cobra.Command {
 			if !validImportOutputFormat(common.outputFormat) {
 				return fmt.Errorf("invalid --output %q (valid: table, json)", common.outputFormat)
 			}
-			if common.filePath == "" {
-				return fmt.Errorf("--file is required")
-			}
-			if measurement == "" {
-				return fmt.Errorf("--measurement is required (CSV files don't carry a measurement name)")
-			}
+			// --file and --measurement are enforced by cobra's
+			// MarkFlagRequired below — no manual check needed here.
 			if skipRows < 0 {
-				// Without this guard a negative value passes through to
-				// ImportCSV, which silently drops it (the `> 0` check in
-				// the client). Validate at the boundary so the user gets
-				// a clear error instead of confusing no-op behavior.
 				return fmt.Errorf("--skip-rows must be >= 0 (got %d)", skipRows)
 			}
 
@@ -166,6 +164,7 @@ func newImportCSVCmd() *cobra.Command {
 	}
 	addImportCommonFlags(c, &common)
 	c.Flags().StringVar(&measurement, "measurement", "", "target measurement name (required)")
+	_ = c.MarkFlagRequired("measurement")
 	c.Flags().StringVar(&timeColumn, "time-column", "", "column to use as the row timestamp (server default: time)")
 	c.Flags().StringVar(&timeFormat, "time-format", "", "epoch_s|epoch_ms|epoch_us|epoch_ns (empty = let DuckDB infer, works for ISO-8601 strings)")
 	c.Flags().StringVar(&delimiter, "delimiter", "", "field separator (server default: ,)")
@@ -201,9 +200,8 @@ Server-side cap: 500 MB decompressed.`,
 			if !validImportOutputFormat(common.outputFormat) {
 				return fmt.Errorf("invalid --output %q (valid: table, json)", common.outputFormat)
 			}
-			if common.filePath == "" {
-				return fmt.Errorf("--file is required")
-			}
+			// --file is enforced by cobra's MarkFlagRequired in
+			// addImportCommonFlags.
 			if precision != "" && !client.ValidPrecision(precision) {
 				return fmt.Errorf("invalid --precision %q (must be one of ns, us, ms, s)", precision)
 			}
@@ -259,12 +257,8 @@ to CSV for the same data.`,
 			if !validImportOutputFormat(common.outputFormat) {
 				return fmt.Errorf("invalid --output %q (valid: table, json)", common.outputFormat)
 			}
-			if common.filePath == "" {
-				return fmt.Errorf("--file is required")
-			}
-			if measurement == "" {
-				return fmt.Errorf("--measurement is required (Parquet files don't carry a measurement name)")
-			}
+			// --file and --measurement are enforced by cobra's
+			// MarkFlagRequired below.
 
 			cli, _, err := buildClient(cmd.ErrOrStderr(), common.connectionName, common.endpoint, common.token, common.insecure, common.timeout)
 			if err != nil {
@@ -288,6 +282,7 @@ to CSV for the same data.`,
 	}
 	addImportCommonFlags(c, &common)
 	c.Flags().StringVar(&measurement, "measurement", "", "target measurement name (required)")
+	_ = c.MarkFlagRequired("measurement")
 	c.Flags().StringVar(&timeColumn, "time-column", "", "column to use as the row timestamp (server default: time)")
 	return c
 }
@@ -319,9 +314,9 @@ server's default behavior).`,
 			if !validImportOutputFormat(common.outputFormat) {
 				return fmt.Errorf("invalid --output %q (valid: table, json)", common.outputFormat)
 			}
-			if common.filePath == "" {
-				return fmt.Errorf("--file is required")
-			}
+			// --file is enforced by cobra's MarkFlagRequired in
+			// addImportCommonFlags. --measurement is optional for TLE
+			// (server defaults to "satellite_tle"), so no required mark.
 
 			cli, _, err := buildClient(cmd.ErrOrStderr(), common.connectionName, common.endpoint, common.token, common.insecure, common.timeout)
 			if err != nil {

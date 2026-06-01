@@ -207,6 +207,91 @@ func TestImportCSV_MissingDatabase(t *testing.T) {
 	}
 }
 
+// TestImportCSV_RejectsEmptyMeasurement and the three TimeFormat/
+// Delimiter tests below pin the client-boundary validations added in
+// Gemini PR #3 round 5. Each fails before the server is contacted,
+// so the test handler's t.Fatal would fire on any regression.
+
+func TestImportCSV_RejectsEmptyMeasurement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called with empty measurement")
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.csv", "x\n1\n")
+	_, err := c.ImportCSV(context.Background(), filePath, "metrics", "", CSVImportOptions{})
+	if err == nil || !strings.Contains(err.Error(), "measurement is required") {
+		t.Errorf("expected measurement-required error, got %v", err)
+	}
+}
+
+func TestImportCSV_RejectsMultiCharDelimiter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called with multi-char delimiter")
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.csv", "x\n1\n")
+	_, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{Delimiter: "||"})
+	if err == nil || !strings.Contains(err.Error(), "Delimiter must be a single character") {
+		t.Errorf("expected delimiter-single-char error, got %v", err)
+	}
+}
+
+func TestImportCSV_AcceptsSingleRuneDelimiter(t *testing.T) {
+	// A multi-byte UTF-8 single rune (e.g. en-dash, U+2013, 3 bytes)
+	// should pass the `len([]rune) == 1` check.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		writeImportEnvelope(t, w, ImportResult{Database: "metrics", Measurement: "cpu"})
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.csv", "x\n1\n")
+	if _, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{Delimiter: "—"}); err != nil {
+		t.Errorf("single multi-byte rune should be accepted, got %v", err)
+	}
+}
+
+func TestImportCSV_RejectsInvalidTimeFormat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called with invalid time_format")
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.csv", "x\n1\n")
+	_, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{TimeFormat: "epoch_milliseconds"})
+	if err == nil || !strings.Contains(err.Error(), "invalid CSVImportOptions.TimeFormat") {
+		t.Errorf("expected time-format-enum error, got %v", err)
+	}
+}
+
+func TestImportCSV_AcceptsEmptyTimeFormat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		writeImportEnvelope(t, w, ImportResult{Database: "metrics", Measurement: "cpu"})
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.csv", "x\n1\n")
+	if _, err := c.ImportCSV(context.Background(), filePath, "metrics", "cpu", CSVImportOptions{TimeFormat: ""}); err != nil {
+		t.Errorf("empty TimeFormat should be accepted (means infer), got %v", err)
+	}
+}
+
+func TestImportParquet_RejectsEmptyMeasurement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called with empty measurement")
+	}))
+	defer srv.Close()
+	c := freshClient(t, srv, "metrics")
+	filePath := writeTempFile(t, "x.parquet", "fake")
+	_, err := c.ImportParquet(context.Background(), filePath, "metrics", "", ParquetImportOptions{})
+	if err == nil || !strings.Contains(err.Error(), "measurement is required") {
+		t.Errorf("expected measurement-required error, got %v", err)
+	}
+}
+
 // TestImportCSV_RejectsNegativeSkipRows pins the client-layer
 // validation Gemini added in PR #3 round 4. The cobra layer rejects
 // negative --skip-rows at RunE, but the client must ALSO reject so

@@ -109,15 +109,27 @@ type TLEImportOptions struct {
 // Server requires the `measurement` query param (not derivable from the
 // file). Server-side admin auth required.
 func (c *Client) ImportCSV(ctx context.Context, filePath, database, measurement string, opts CSVImportOptions) (*ImportResult, error) {
-	// Explicitly reject negative SkipRows. Previously this branch was
-	// `opts.SkipRows > 0` which silently dropped negative values — the
-	// cobra layer rejects them at RunE today, but any future caller
-	// that bypasses the cobra path (a programmatic test helper, a
-	// follow-up command) would re-introduce the silent-drop bug.
-	// Surfacing it here makes the contract explicit at the client
-	// boundary. (Gemini PR #3 round 4.)
+	// Client-boundary validation. The cobra layer also validates, but
+	// keeping these here means programmatic callers (test helpers,
+	// future subcommands that bypass cobra) get the same guarantees.
+	// (Gemini PR #3 rounds 4 + 5.)
+	if measurement == "" {
+		return nil, fmt.Errorf("measurement is required")
+	}
 	if opts.SkipRows < 0 {
 		return nil, fmt.Errorf("CSVImportOptions.SkipRows must be >= 0 (got %d)", opts.SkipRows)
+	}
+	if opts.Delimiter != "" && len([]rune(opts.Delimiter)) != 1 {
+		// DuckDB's read_csv `delim=` takes a single character. Anything
+		// else would surface as a confusing server-side parse error;
+		// fail fast with a clear message instead.
+		return nil, fmt.Errorf("CSVImportOptions.Delimiter must be a single character (got %q)", opts.Delimiter)
+	}
+	switch opts.TimeFormat {
+	case "", "epoch_s", "epoch_ms", "epoch_us", "epoch_ns":
+		// valid (empty means "let the server / DuckDB infer")
+	default:
+		return nil, fmt.Errorf("invalid CSVImportOptions.TimeFormat %q (must be one of: epoch_s, epoch_ms, epoch_us, epoch_ns)", opts.TimeFormat)
 	}
 
 	q := url.Values{}
@@ -149,6 +161,11 @@ func (c *Client) ImportCSV(ctx context.Context, filePath, database, measurement 
 // ImportParquet uploads a Parquet file via POST /api/v1/import/parquet.
 // Measurement is required (Parquet files don't carry a measurement name).
 func (c *Client) ImportParquet(ctx context.Context, filePath, database, measurement string, opts ParquetImportOptions) (*ImportResult, error) {
+	// Client-boundary validation. (Gemini PR #3 round 5.)
+	if measurement == "" {
+		return nil, fmt.Errorf("measurement is required")
+	}
+
 	q := url.Values{}
 	q.Set("measurement", measurement)
 	if opts.TimeColumn != "" {
